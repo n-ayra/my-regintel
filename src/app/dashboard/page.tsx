@@ -1,184 +1,106 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from "react";
-import ArticleCard from "@/components/ArticleCard";
+import { useEffect, useState } from 'react';
 
-const SearchIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg {...props} xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="11" cy="11" r="8"></circle>
-    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-  </svg>
-);
+type VerifiedUpdate = {
+  id: number;
+  regulation: string;
+  deduced_title: string;
+  summary_text: string;
+  impact_level: 'High' | 'Medium' | 'Low';
+  primary_source_url: string | null;
+  related_article_ids: number[];
+  created_at: string;
+};
 
-const FilterIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg {...props} xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-  </svg>
-);
+export default function DashboardPage() {
+  const [updates, setUpdates] = useState<VerifiedUpdate[]>([]);
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
 
-export default function Page() {
-
-  interface Article {
-    id: string;
-    article_name: string;
-    regulation_name: string;
-    summary: string;
-    published_date: string;
-    retrieved_date: string;
-    type: string;
-    source_link: string;
+  // Fetch updates via API route
+  async function fetchUpdates() {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/verified-updates');
+      const data = await res.json();
+      setUpdates(data);
+    } catch (err) {
+      console.error('Fetch updates error', err);
+    }
+    setLoading(false);
   }
 
-  const [articleList, setArticleList] = useState<Article[]>([]);
-  const [latestUpdate, setLatestUpdate] = useState<Article | null>(null);
-  const [isDataLoaded, setIsDataLoaded] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [sortBy, setSortBy] = useState("regulation");
-  const [filterType, setFilterType] = useState("all");
-
   useEffect(() => {
-    async function loadData() {
-      try {
-        // Fetch historical articles
-        const resArticles = await fetch("/api/get-articles");
-        const dataArticles = await resArticles.json();
-        setArticleList(dataArticles.articles || []);
-
-        // Fetch latest verified SVHC update
-        const resUpdate = await fetch("/api/svhc/check");
-        const dataUpdate = await resUpdate.json();
-
-        if (dataUpdate.update_found) {
-          const card = dataUpdate.article_card;
-          setLatestUpdate({
-            id: "latest",
-            article_name: card.title,
-            regulation_name: "ECHA SVHC Candidate List",
-            summary: card.summary,
-            published_date: dataUpdate.update_date,   // use update_date
-            retrieved_date: dataUpdate.update_date,  // same for consistency
-            type: "Legislative Change",
-            source_link: card.url
-          });
-        }
-
-        setIsDataLoaded(true);
-      } catch (err) {
-        console.error("Failed to load articles or SVHC update:", err);
-        setIsDataLoaded(true);
-      }
-    }
-    loadData();
+    fetchUpdates();
   }, []);
 
-  const processedArticles = useMemo(() => {
-    let result = [...articleList];
-    if (latestUpdate) result.unshift(latestUpdate); // always show latest update first
+  const toggleExpand = (id: number) => {
+    setExpanded(expanded === id ? null : id);
+  };
 
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(item =>
-        item.article_name?.toLowerCase().includes(q) ||
-        item.regulation_name?.toLowerCase().includes(q)
-      );
+  const impactColor = (level: string) => {
+    switch (level) {
+      case 'High': return 'bg-red-500';
+      case 'Medium': return 'bg-yellow-400';
+      case 'Low': return 'bg-green-400';
+      default: return 'bg-gray-400';
     }
-
-    if (filterType !== "all") {
-      result = result.filter(item => item.type === filterType);
-    }
-
-    result.sort((a, b) => {
-      if (sortBy === "regulation") {
-        return a.regulation_name.localeCompare(b.regulation_name);
-      }
-      if (sortBy === "date") {
-        return new Date(b.published_date).getTime() - new Date(a.published_date).getTime();
-      }
-      return 0;
-    });
-
-    return result;
-  }, [articleList, latestUpdate, searchQuery, sortBy, filterType]);
+  };
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-[#f9f4f2] to-[#f5e9e6] p-6 font-sans">
+    <div className="p-6">
+      <h1 className="text-3xl font-bold mb-4">Regulatory Intelligence Dashboard</h1>
 
-      <header className="flex items-center gap-3 mb-8">
-        <div className="w-12 h-12 rounded-xl bg-orange-500 shadow-sm" />
-        <div>
-          <h1 className="text-2xl font-bold text-orange-600">RegIntels</h1>
-          <p className="text-sm text-gray-600">Product Compliance Monitoring for 25 Products Across 21 Global Regulations</p>
-        </div>
-      </header>
+      
+		<button
+		onClick={async () => {
+			const res = await fetch('/api/run-pipeline');
+			const data = await res.json();
+			console.log('Pipeline result:', data);
+		}}
+		>
+		Refresh
+		</button>
 
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between mb-6 gap-4">
-        <h2 className="text-3xl font-medium text-gray-900 tracking-tight">Latest Update</h2>
 
-        <div className="flex flex-wrap items-center gap-3 md:gap-4">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500 whitespace-nowrap">Sort by:</span>
-            <div className="relative">
-              <select 
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                className="appearance-none bg-white py-1.5 pl-4 pr-8 rounded-full text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-200 cursor-pointer hover:bg-gray-50"
+      {loading ? (
+        <p>Loading...</p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {updates.map(update => (
+            <div key={update.id} className="border rounded shadow p-4">
+              <div
+                className="flex justify-between items-center cursor-pointer"
+                onClick={() => toggleExpand(update.id)}
               >
-                <option value="regulation">Regulation Name</option>
-                <option value="date">Date Published</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500 whitespace-nowrap">Filter by:</span>
-            <div className="relative">
-              <select 
-                value={filterType}
-                onChange={(e) => setFilterType(e.target.value)}
-                className="appearance-none bg-white py-1.5 pl-4 pr-10 rounded-full text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-200 cursor-pointer hover:bg-gray-50"
-              >
-                <option value="all">Select</option>
-                <option value="Legislative Change">Legislative Change</option>
-                <option value="Chemical Addition">Chemical Addition</option>
-              </select>
-              <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                <FilterIcon className="text-gray-400 w-3.5 h-3.5" />
+                <h2 className="text-lg font-semibold">{update.deduced_title}</h2>
+                <span className={`px-2 py-1 text-white text-sm rounded ${impactColor(update.impact_level)}`}>
+                  {update.impact_level}
+                </span>
               </div>
-            </div>
-          </div>
 
-          <div className="relative w-full md:w-auto">
-            <input 
-              type="text" 
-              placeholder="Search" 
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full md:w-64 py-1.5 pl-4 pr-10 rounded-full text-sm text-gray-700 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-200"
-            />
-            <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-              <SearchIcon className="text-gray-400" />
+              {expanded === update.id && (
+                <div className="mt-3 text-sm space-y-2">
+                  <p>{update.summary_text}</p>
+                  {update.primary_source_url && (
+                    <p>
+                      Primary Source:{' '}
+                      <a href={update.primary_source_url} target="_blank" rel="noopener noreferrer"
+                         className="text-blue-600 underline">
+                        {update.primary_source_url}
+                      </a>
+                    </p>
+                  )}
+                  {update.related_article_ids?.length > 0 && (
+                    <p>Related Articles IDs: {update.related_article_ids.join(', ')}</p>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex w-full gap-6">
-        <div className="w-full lg:w-2/3 flex flex-col gap-4">
-          {processedArticles.map((article) => (
-            <ArticleCard
-              key={article.id}
-              isLoaded={isDataLoaded}
-              title={article.article_name}
-              regulationName={article.regulation_name}
-              summary={article.summary}
-              publishedDate={article.published_date}
-              retrievedDate={article.retrieved_date}
-              sourceLink={article.source_link}
-            />
           ))}
         </div>
-      </div>
-
+      )}
     </div>
   );
 }
