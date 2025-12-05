@@ -2,17 +2,17 @@
 
 :root {
   --background: #f4f1ef;
-  --foreground: #e5cec0;
-  --secondary: #fff5ee;
-  --accent: #fe7620;
+  --foreground: #c0e5d4;
+  --secondary: #eefff6;
+  --accent: #20fee4;
   --font-sans: Inter, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #2a1f1a;
+    --background: #1a2a29;
     --foreground: #f4f1ef;
-    --secondary: #5d4d47;
+    --secondary: #475d59;
   }
 }
 
