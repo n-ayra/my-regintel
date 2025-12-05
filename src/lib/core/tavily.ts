@@ -10,7 +10,6 @@ export type TavilyArticle = {
   published_date?: string | null;
 };
 
-// Accept any options to avoid TS errors
 export async function tavilySearch(
   query: string,
   opts: Record<string, any> = {}
@@ -43,7 +42,7 @@ export async function tavilyExtract(
   url: string
 ): Promise<{ rawContent: string; markdownContent: string }> {
   const res = await tavily().extract([url]);
-  const item = res?.results?.[0] as any; // <-- cast to any to bypass TS errors
+  const item = res?.results?.[0] as any;
 
   return {
     rawContent: item?.rawContent ?? '',

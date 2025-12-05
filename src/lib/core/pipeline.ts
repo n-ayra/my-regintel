@@ -1,63 +1,119 @@
-// src/lib/core/pipeline.ts
 import { supabase } from './database';
 import { tavilySearch, tavilyExtract, TavilyArticle as TavilyArticleCore } from './tavily';
 import { askOpenAI } from './openai';
 import dayjs from 'dayjs';
+import { buildSynthesisPrompt } from "@/lib/regulations/svhc/processors";
+import isSameOrAfter from "dayjs/plugin/isSameOrAfter";
+import isSameOrBefore from "dayjs/plugin/isSameOrBefore";
+dayjs.extend(isSameOrAfter);
+dayjs.extend(isSameOrBefore);
+import * as chrono from 'chrono-node';
 
-export type TavilyArticle = TavilyArticleCore;
+
+
+export type TavilyArticle = TavilyArticleCore & {
+  id?: number;
+  published_at?: string;
+};
 
 export type RegConfig = {
   id: string;
   searchQueries: string[];
   primarySourceUrl?: string;
   allowedDomains?: string[];
-  triggerWords?: string[]; 
+  triggerWords?: string[];
   maxArticles?: number;
-
 };
 
-export type CandidateUpdate = any;
-export type VerificationResult = any;
+export type CandidateUpdate = {
+  article_id?: number | null;
+  explicit_addition_claim?: boolean;
+  impact_level?: 'High' | 'Medium' | 'Low' | 'None';
+  evidence_summary?: string;
+  claims?: any[];
+  [key: string]: any;
+};
 
-
-export async function scanAndStoreArticles(config: { id: string; searchQueries: string[] }, maxPerQuery = 10): Promise<number[]> {
+// ---------------------------------------------------------
+// Scan and store articles
+// ---------------------------------------------------------
+export async function scanAndStoreArticles(
+  config: { id: string; searchQueries: string[] },
+  maxPerQuery = 10
+): Promise<number[]> {
   console.log(`Scanning articles for config: ${config.id}`);
 
   const aggregatedResults: TavilyArticle[] = [];
-  const sixMonthsAgo = dayjs().subtract(6, 'month').format('YYYY-MM-DD');
+  const oneYearAgo = dayjs().subtract(1, 'year').startOf('day');
 
   for (const query of config.searchQueries) {
     try {
       const results = await tavilySearch(query, {
         size: maxPerQuery,
-        start_date: sixMonthsAgo,       
-        include_raw_content: true,      
+        include_raw_content: true,
         max_results: maxPerQuery,
         include_answer: false
       });
-      console.log(`Found ${results.length} articles for query "${query}"`);
-      aggregatedResults.push(...results);
+
+      for (const r of results || []) {
+  let publishedDate = r.published_date;
+
+      // Step 1: Extract from article content / HTML
+      if (!publishedDate && r.content) {
+        const htmlMatch = r.content.match(
+          /<meta[^>]*(?:name|property)=["'](?:article:published_time|date)["'][^>]*content=["']([^"']+)["']/i
+        );
+        if (htmlMatch) publishedDate = htmlMatch[1];
+      }
+
+
+        // Step 2: Fallback to parsing text for dates
+        if (!publishedDate && r.content) {
+          const parsed = chrono.parse(r.content);
+          if (parsed.length > 0) {
+            publishedDate = parsed[0].date().toISOString();
+          }
+        }
+
+        // Step 3: Only keep articles from the last year
+        if (publishedDate && dayjs(publishedDate).isSameOrAfter(oneYearAgo)) {
+          aggregatedResults.push({ ...r, published_at: publishedDate });
+        }
+      }
+
+      console.log(
+        `Found ${aggregatedResults.length} recent articles for query "${query}" (raw: ${results.length})`
+      );
     } catch (err) {
       console.error('Tavily search error', query, err);
     }
   }
 
+  // Insert deduped articles into database
   const insertedIds: number[] = [];
-
   for (const art of aggregatedResults) {
     try {
-      const { data: existing } = await supabase.from('raw_articles').select('id').eq('url', art.url).limit(1);
+      const { data: existing } = await supabase
+        .from('raw_articles')
+        .select('id')
+        .eq('url', art.url)
+        .limit(1);
+
       if (!existing || existing.length === 0) {
-        const { data, error } = await supabase.from('raw_articles').insert({
-          url: art.url,
-          title: art.title ?? null,
-          snippet: art.snippet ?? null,
-          content: art.content ?? null,
-          source: art.source ?? art.domain ?? null,
-          regulation: config.id,
-          is_processed: false,
-          published_at: art.published_date ?? null
-        }).select('id').single();
+        const { data, error } = await supabase
+          .from('raw_articles')
+          .insert({
+            url: art.url,
+            title: art.title ?? null,
+            snippet: art.snippet ?? null,
+            content: art.content ?? null,
+            source: art.source ?? art.domain ?? null,
+            regulation: config.id,
+            is_processed: false,
+            published_at: art.published_at ?? null
+          })
+          .select('id')
+          .single();
 
         if (error) console.error('Insert raw article error:', error);
         if (data?.id) {
@@ -73,37 +129,24 @@ export async function scanAndStoreArticles(config: { id: string; searchQueries: 
   return insertedIds;
 }
 
+// ---------------------------------------------------------
+// Synthesize articles using OpenAI (safely)
+// ---------------------------------------------------------
+export async function synthesizeArticles(
+  config: RegConfig,
+  articles: TavilyArticle[],
+  promptBuilder: (article: TavilyArticle, config: RegConfig) => string = buildSynthesisPrompt
+): Promise<CandidateUpdate[]> {
 
-/**
- * Summarize each article with OpenAI based on regulation prompt
- */
-export async function synthesizeArticles(config: RegConfig, articles: TavilyArticle[]): Promise<CandidateUpdate[]> {
+  if (!articles || articles.length === 0) {
+    console.log('No recent articles to summarize. Skipping OpenAI synthesis.');
+    return [];
+  }
+
   const results: CandidateUpdate[] = [];
 
   for (const article of articles) {
-    const prompt = `
-You are an expert regulation impact analyst.
-Regulation: ${JSON.stringify(config)}
-Article: ${JSON.stringify({
-      title: article.title,
-      url: article.url,
-      published_date: article.published_date,
-      content: article.content
-    })}
-Your task: Evaluate whether the article affects the regulation based on key_identifiers, trigger_types, and review_conditions.
-Respond in JSON format with:
-{
-  "regulation": string,
-  "impact_level": "high" | "medium" | "low" | "none",
-  "matches": {
-    "key_identifiers": [],
-    "trigger_events": [],
-    "review_conditions_met": []
-  },
-  "summary": string
-}
-Follow the schema strictly.
-`;
+    const prompt = promptBuilder(article, config);
 
     try {
       const response = await askOpenAI([
@@ -111,8 +154,17 @@ Follow the schema strictly.
         { role: 'user', content: prompt }
       ]);
 
-      const parsed = typeof response === 'string' ? JSON.parse(response) : response;
+      let parsed: CandidateUpdate;
+      try {
+        parsed = typeof response === 'string' ? JSON.parse(response) : response;
+      } catch (err) {
+        console.warn('OpenAI returned non-JSON response, skipping article:', article.url, 'Response:', response);
+        continue;
+      }
+
+      parsed.article_id = article.id ?? null;
       results.push(parsed);
+
     } catch (err) {
       console.error('OpenAI article synthesis failed', article.url, err);
     }
@@ -121,11 +173,12 @@ Follow the schema strictly.
   return results;
 }
 
-/**
- * Extract primary source and summarize
- */
+// ---------------------------------------------------------
+// Extract and summarize primary source
+// ---------------------------------------------------------
 export async function extractAndSummarizePrimarySource(config: RegConfig): Promise<string> {
   if (!config.primarySourceUrl) return '';
+
   try {
     const text = await tavilyExtract(config.primarySourceUrl);
     const content = text.markdownContent || text.rawContent || '';
@@ -136,56 +189,90 @@ Summarize the primary source for regulation ${config.id}.
 Text: ${content}
 Output a concise summary of key points relevant to regulatory changes.
 `;
+
     const summary = await askOpenAI([
       { role: 'system', content: 'You are an expert regulatory analyst.' },
       { role: 'user', content: prompt }
     ]);
 
     return typeof summary === 'string' ? summary : JSON.stringify(summary);
+
   } catch (err) {
     console.error('Primary source extraction failed', err);
     return '';
   }
 }
 
-/**
- * Verify candidate updates against primary source
- */
+// ---------------------------------------------------------
+// Verify candidates and store results
+// ---------------------------------------------------------
 export async function verifyAndStoreUpdate(
   config: RegConfig,
   candidates: CandidateUpdate[],
-  primarySourceSummary: string
+  primarySourceSummary: string,
+  primarySourceRawContent?: string
 ) {
+  if (!candidates || candidates.length === 0) {
+    console.log('No candidates to verify. Skipping verification.');
+    return;
+  }
+
   for (const candidate of candidates) {
+    const claims = candidate.claims ?? [];
+    if (!claims.length) {
+      console.log('No claims to verify for article:', candidate.article_id);
+      continue;
+    }
+
     const prompt = `
-Compare the candidate article summary against the primary source summary.
-Candidate: ${JSON.stringify(candidate)}
-PrimarySource: ${primarySourceSummary}
-Determine if this constitutes an actual regulatory update. Respond in JSON with fields:
+You are an expert regulatory verification analyst.
+Regulation: ${JSON.stringify(config)}
+Primary source text (or summary):
+${primarySourceRawContent ?? primarySourceSummary}
+
+Candidate claims (from article ${candidate.article_id}):
+${JSON.stringify(claims, null, 2)}
+
+For each claimed substance, output a JSON array of objects:
 {
-  "deduced_title": string,
-  "summary_text": string,
-  "impact_level": "high" | "medium" | "low",
-  "primary_source_url": string | null
+  "name": "<claimed name>",
+  "cas": "<cas or null>",
+  "claimed_date": "<YYYY-MM-DD|null>",
+  "found_in_primary": true|false,
+  "primary_mention_text": "<excerpt or empty>",
+  "primary_list_date": "<YYYY-MM-DD|null>",
+  "date_matches_claim": true|false,
+  "reasoning": "<short>"
 }
 `;
+
     try {
       const response = await askOpenAI([
-        { role: 'system', content: 'You are a compliance auditor.' },
+        { role: 'system', content: 'You are an expert regulatory verification analyst.' },
         { role: 'user', content: prompt }
       ]);
 
-      const verdict = typeof response === 'string' ? JSON.parse(response) : response;
+      let verificationArray: any[] = [];
+      try {
+        verificationArray = typeof response === 'string' ? JSON.parse(response) : response;
+      } catch {
+        console.warn('OpenAI returned non-JSON verification response for candidate', candidate.article_id);
+      }
+
+      const deducedTitle = candidate.explicit_addition_claim
+        ? `Candidate addition claims for ${config.id}`
+        : `Candidate: ${candidate.article_id}`;
 
       const { data: inserted, error } = await supabase.from('verified_updates')
         .insert({
           regulation: config.id,
-          deduced_title: verdict.deduced_title ?? candidate.summary ?? 'Regulatory update',
-          summary_text: verdict.summary_text ?? candidate.summary ?? '',
-          impact_level: verdict.impact_level ?? 'Medium',
-          primary_source_url: verdict.primary_source_url ?? config.primarySourceUrl ?? null,
-          related_article_ids: candidates.map(c => c.article_id ?? null),
-          verification_status: true
+          deduced_title: deducedTitle,
+          summary_text: candidate.evidence_summary ?? '',
+          impact_level: candidate.impact_level ?? 'Medium',
+          primary_source_url: config.primarySourceUrl ?? null,
+          related_article_ids: [candidate.article_id].filter(Boolean),
+          verification_status: true,
+          verification_details: verificationArray
         })
         .select('id')
         .single();
@@ -193,54 +280,48 @@ Determine if this constitutes an actual regulatory update. Respond in JSON with 
       if (error) console.error('Failed to insert verified update', error);
       if (inserted?.id) console.log('Inserted verified update ID:', inserted.id);
 
-      // mark raw articles as processed
-      const articleIds = candidates.map(c => c.article_id).filter(Boolean);
-      if (articleIds.length > 0) {
-        await supabase.from('raw_articles').update({ is_processed: true }).in('id', articleIds);
+      if (candidate.article_id) {
+        await supabase.from('raw_articles').update({ is_processed: true }).eq('id', candidate.article_id);
       }
     } catch (err) {
-      console.error('Verification failed', err);
+      console.error('Verification failed for candidate', candidate.article_id, err);
     }
   }
 }
 
-/**
- * Main pipeline
- */
+// ---------------------------------------------------------
+// Main pipeline
+// ---------------------------------------------------------
 export async function runRegulationPipeline({
   config,
-  synthesisPromptBuilder,
+  synthesisPromptBuilder = buildSynthesisPrompt,
   verificationPromptBuilder,
-  maxSearchPerQuery = 10
+  maxSearchPerQuery = 5
 }: {
-  config: RegConfig,
-  synthesisPromptBuilder: (articles: TavilyArticle[]) => string,
-  verificationPromptBuilder: (candidate: any, officialText: string) => string,
-  maxSearchPerQuery?: number
+  config: RegConfig;
+  synthesisPromptBuilder?: (article: TavilyArticle, config: RegConfig) => string;
+  verificationPromptBuilder?: (candidate: any, officialText: string) => string;
+  maxSearchPerQuery?: number;
 }) {
   console.log('Pipeline started for config:', config.id);
 
-  // 1. Scan and store articles
-  const insertedIds = await scanAndStoreArticles(config, 10);
+  const insertedIds = await scanAndStoreArticles(config, maxSearchPerQuery);
 
-  // 2. Fetch unprocessed articles
   const { data: rawRows } = await supabase.from('raw_articles')
     .select('*')
     .eq('is_processed', false)
     .eq('regulation', config.id)
     .order('published_at', { ascending: false })
-    .limit(10);
+    .limit(maxSearchPerQuery);
 
   const articles: TavilyArticle[] = rawRows ?? [];
 
-  // 3. Synthesize article summaries
-  const candidates = await synthesizeArticles(config, articles);
+  const candidates = await synthesizeArticles(config, articles, synthesisPromptBuilder);
 
-  // 4. Extract and summarize primary source
   const primarySourceSummary = await extractAndSummarizePrimarySource(config);
 
-  // 5. Verify candidates against primary source
   await verifyAndStoreUpdate(config, candidates, primarySourceSummary);
 
+  console.log('Pipeline finished for config:', config.id);
   return { ok: true, insertedIds, candidates };
 }

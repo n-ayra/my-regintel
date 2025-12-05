@@ -1,23 +1,14 @@
-// app/api/run-pipeline/route.ts (Next.js App Router)
 import { NextRequest } from 'next/server';
 import { runRegulationPipeline } from '@/lib/core/pipeline';
-
-// Example config
-const testConfig = {
-  id: 'svhc_eu_reach',
-  searchQueries: ['EU REACH SVHC regulation updates Annex XIV'],
-  primarySourceUrl: 'https://example.com'
-};
-
-// Minimal prompt builders
-const synthesisPromptBuilder = (articles: any[]) => `Summarize ${articles.length} articles`;
-const verificationPromptBuilder = (candidate: any, officialText: string) => `Verify: ${candidate?.summary ?? ''}`;
+import { SVHC_CONFIG } from '@/lib/regulations/svhc/config';
+import { buildSynthesisPrompt, buildVerificationPrompt } from '@/lib/regulations/svhc/processors';
 
 export async function GET(req: NextRequest) {
   const result = await runRegulationPipeline({
-    config: testConfig,
-    synthesisPromptBuilder,
-    verificationPromptBuilder
+    config: SVHC_CONFIG,
+    synthesisPromptBuilder: buildSynthesisPrompt,
+    verificationPromptBuilder: buildVerificationPrompt,
+    maxSearchPerQuery: SVHC_CONFIG.maxArticles ?? 5
   });
 
   return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });

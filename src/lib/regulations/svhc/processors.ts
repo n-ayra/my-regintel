@@ -3,6 +3,7 @@ import { SVHC_CONFIG } from "./config";
 
 
 // Build synthesis prompt for OpenAI (per article)
+// processors.ts — updated buildSynthesisPrompt
 export const buildSynthesisPrompt = (article: TavilyArticle, regulation: any) => {
   return `
 You are an expert regulation impact analyst.
@@ -15,64 +16,85 @@ You will receive:
     content: article.content ?? article.snippet ?? "",
   }, null, 2)}
 
-Your task:
-Evaluate whether the article likely affects the regulation.
-Rules:
-- Match ONLY using the provided fields.
-- Prioritize exact or close matches between article text and:
-  - regulation.key_identifiers
-  - regulation.trigger_types
-- Check if any regulation.review_conditions are fulfilled.
+  Task:
 
-Steps to follow:
-1. Extract relevant entities from the article (substances, chemicals, polymers, CAS, legal actions).
-2. Compare extracted entities against regulation.key_identifiers.
-3. Detect trigger events by matching article phrases against regulation.trigger_types.
-4. Determine if any review_conditions are satisfied.
-5. Classify impact as:
-   - "high" (direct change to identifiers or clear trigger)
-   - "medium" (related topic but unclear whether identifiers are affected)
-   - "low" (weak relevance but part of the same domain)
-   - "none" (no overlap found)
-6. Explain your reasoning in a structured manner.
+  1) Extract a list of mentioned substances/entities that the article claims were ADDED
+    to the regulation/candidate list.
 
-Output JSON with fields:
-{
-  "regulation": "${regulation.id}",
-  "impact_level": "high" | "medium" | "low" | "none",
-  "matches": {
-    "key_identifiers": [...],
-    "trigger_events": [...],
-    "review_conditions_met": [...]
-  },
-  "summary": string
-}
-Behave deterministically and follow the schema strictly.
+    For each extracted item produce:
+    {
+      "name": "<text>",
+      "cas": "<CAS if present or null>",
+      "claimed_date": "<YYYY-MM-DD or null>",
+      "quoted_phrase": "<short excerpt showing the claim>"
+    }
+
+  2) NUMBER-BASED INFERENCE RULE (Option B):
+
+    If the article states that the total number of substances increased
+    (e.g., "from 250 to 251", "now totals 251", "increased by 1")
+    but no substance names are provided:
+
+    - Compute the numeric difference (new_total - old_total).
+    - For each inferred added substance, create a placeholder object:
+      {
+        "name": "unnamed substance",
+        "cas": null,
+        "claimed_date": "<article date if stated, else null>",
+        "quoted_phrase": "<sentence containing the numeric change>"
+      }
+    - Add these placeholder items to the claims array.
+    - Set explicit_addition_claim = true.
+
+  3) Judge whether the article explicitly claims an addition (true/false)
+    based on direct statements or number-based inference.
+
+  4) Provide a short evidence summary and classify the impact level
+    (high | medium | low | none).
+
+  Output EXACT JSON only in the format:
+  {
+    "regulation": "${regulation.id}",
+    "article_url": "${article.url}",
+    "article_published_date": "${article.published_date ?? null}",
+    "claims": [...],
+    "explicit_addition_claim": true|false,
+    "impact_level": "high" | "medium" | "low" | "none",
+    "evidence_summary": "<short string>"
+  }
+
 `;
 };
+
 
 // Build verification prompt to compare article summaries with primary source
-export const buildVerificationPrompt = (articleSummaries: any[], primarySourceContent: string, regulation: any) => {
-  return `
-You are an expert regulation impact analyst.
-Compare the following article summaries with the primary source content of the regulation.
-Determine whether each article indicates an actual regulatory update.
+export const buildVerificationPrompt = (candidate: any, officialText: string) => `
+You are an expert regulatory verification analyst.
 
-Regulation: ${JSON.stringify(regulation, null, 2)}
+Candidate extracted from article:
+${JSON.stringify(candidate, null, 2)}
 
-Articles:
-${JSON.stringify(articleSummaries, null, 2)}
+Official ECHA candidate list text:
+${officialText}
 
-Primary source content:
-${primarySourceContent}
+For EACH item in candidate.claims, check whether the substance actually appears in the primary source.
 
-Output JSON array for each article with:
-- url
-- update_detected: true/false
-- reasoning: short explanation
-- impact_level: "high" | "medium" | "low" | "none"
+Output ONLY a JSON array:
+[
+  {
+    "name": "<claimed name>",
+    "cas": "<string|null>",
+    "claimed_date": "<YYYY-MM-DD|null>",
+    "found_in_primary": true|false,
+    "primary_mention_text": "<excerpt or empty>",
+    "primary_list_date": "<YYYY-MM-DD|null>",
+    "date_matches_claim": true|false,
+    "reasoning": "<short reasoning>"
+  }
+]
 `;
-};
+
+
 
 
 export const svhcSynthesisPrompt = (articles: TavilyArticle[]) => {
@@ -82,5 +104,5 @@ export const svhcSynthesisPrompt = (articles: TavilyArticle[]) => {
 
 // Wrap verification for pipeline: candidate + primary source
 export const svhcVerificationPrompt = (candidate: any, primarySourceContent: string) => {
-  return buildVerificationPrompt([candidate], primarySourceContent, SVHC_CONFIG);
+  return buildVerificationPrompt(candidate, primarySourceContent);
 };
