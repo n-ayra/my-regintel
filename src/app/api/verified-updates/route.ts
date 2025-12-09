@@ -3,9 +3,13 @@ import { supabase } from '@/lib/core/database';
 
 export async function GET() {
   const { data, error } = await supabase
-    .from('verified_updates')
-    .select('*')
-    .order('created_at', { ascending: false });
+    .from('latest_verified_updates')
+    .select(`
+    regulation_id,
+    deduced_published_date,
+    verified_updates:verified_update_id(*)
+    `)
+    .order('deduced_published_date', { ascending: false });
 
   if (error) {
     console.error('Verified updates API error:', error);

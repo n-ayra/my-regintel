@@ -1,7 +1,7 @@
 import type { RegConfig } from "@/lib/core/pipeline";
 
 export const SVHC_CONFIG: RegConfig = {
-  id: "svhc_eu_reach",
+  id: "EU REACH SVHC",
   searchQueries: [
     "EU REACH SVHC regulation updates as of now",
   ],

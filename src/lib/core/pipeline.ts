@@ -10,7 +10,6 @@ dayjs.extend(isSameOrBefore);
 import * as chrono from 'chrono-node';
 
 
-
 export type TavilyArticle = TavilyArticleCore & {
   id?: number;
   published_at?: string;
@@ -30,9 +29,11 @@ export type CandidateUpdate = {
   explicit_addition_claim?: boolean;
   impact_level?: 'High' | 'Medium' | 'Low' | 'None';
   evidence_summary?: string;
+  article_published_date?: string | null;
   claims?: any[];
   [key: string]: any;
 };
+
 
 // ---------------------------------------------------------
 // Scan and store articles
@@ -224,15 +225,14 @@ export async function verifyAndStoreUpdate(
       continue;
     }
 
+    // Build verification prompt
     const prompt = `
 You are an expert regulatory verification analyst.
 Regulation: ${JSON.stringify(config)}
 Primary source text (or summary):
 ${primarySourceRawContent ?? primarySourceSummary}
-
 Candidate claims (from article ${candidate.article_id}):
 ${JSON.stringify(claims, null, 2)}
-
 For each claimed substance, output a JSON array of objects:
 {
   "name": "<claimed name>",
@@ -252,6 +252,7 @@ For each claimed substance, output a JSON array of objects:
         { role: 'user', content: prompt }
       ]);
 
+      // Parse response safely
       let verificationArray: any[] = [];
       try {
         verificationArray = typeof response === 'string' ? JSON.parse(response) : response;
@@ -259,10 +260,18 @@ For each claimed substance, output a JSON array of objects:
         console.warn('OpenAI returned non-JSON verification response for candidate', candidate.article_id);
       }
 
+      // Sanitize timestamps for Postgres
+      verificationArray = verificationArray.map((v) => ({
+        ...v,
+        primary_list_date: v.primary_list_date ? new Date(v.primary_list_date).toISOString() : null
+      }));
+
+      // Determine title
       const deducedTitle = candidate.explicit_addition_claim
         ? `Candidate addition claims for ${config.id}`
         : `Candidate: ${candidate.article_id}`;
 
+      // Insert into verified_updates
       const { data: inserted, error } = await supabase.from('verified_updates')
         .insert({
           regulation: config.id,
@@ -277,11 +286,29 @@ For each claimed substance, output a JSON array of objects:
         .select('id')
         .single();
 
-      if (error) console.error('Failed to insert verified update', error);
-      if (inserted?.id) console.log('Inserted verified update ID:', inserted.id);
+      if (error) {
+        console.error('Failed to insert verified update', error);
+        continue;
+      }
 
+      console.log('Inserted verified update ID:', inserted?.id);
+
+      // Mark article as processed
       if (candidate.article_id) {
         await supabase.from('raw_articles').update({ is_processed: true }).eq('id', candidate.article_id);
+      }
+
+      // --- Update latest_verified_updates pointer table ---
+      if (inserted?.id) {
+        try {
+          await supabase.rpc('upsert_latest_verified_update', {
+            in_regulation_id: config.id,
+            in_verified_update_id: inserted.id,
+            in_deduced_published_date: candidate.claimed_date ? new Date(candidate.claimed_date).toISOString() : null
+          });
+        } catch (err) {
+          console.error('Failed to update latest_verified_updates pointer', err);
+        }
       }
     } catch (err) {
       console.error('Verification failed for candidate', candidate.article_id, err);
