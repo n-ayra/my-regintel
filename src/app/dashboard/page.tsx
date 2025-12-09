@@ -71,7 +71,7 @@ export default function DashboardPage() {
             pipelineRunning ? 'bg-gray-400 cursor-not-allowed' : 'bg-[var(--accent)] hover:opacity-90 hover:scale-105'
           }`}
         >
-          {pipelineRunning ? 'Processing...' : 'Run Pipeline'}
+          {pipelineRunning ? 'Processing...' : 'Start Scanning'}
           {!pipelineRunning && <ArrowRight className="h-5 w-5" />}
         </button>
       </div>

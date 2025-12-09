@@ -106,3 +106,4 @@ export const svhcSynthesisPrompt = (articles: TavilyArticle[]) => {
 export const svhcVerificationPrompt = (candidate: any, primarySourceContent: string) => {
   return buildVerificationPrompt(candidate, primarySourceContent);
 };
+

@@ -10,3 +10,5 @@ export const SVHC_CONFIG: RegConfig = {
   triggerWords: ["SVHC", "Annex XIV", "authorisation", "candidate list"],
   maxArticles: 5, 
 };
+
+
