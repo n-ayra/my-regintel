@@ -1,6 +1,7 @@
+//Supabase Configurations
 import { createClient } from '@supabase/supabase-js';
 
-// Read keys from environment
+// Using keys from .env
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 

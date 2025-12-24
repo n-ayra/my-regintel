@@ -13,7 +13,7 @@ export type VerifiedUpdate = {
   created_at: string;
   deduced_title: string;
   summary_text: string;
-  impact_level: 'High'|'Medium'|'Low';
+  impact_level: 'high'|'medium'|'low';
   primary_source_url?: string;
   related_article_ids?: number[];
   verification_status: boolean;

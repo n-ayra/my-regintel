@@ -7,73 +7,85 @@ type Article = {
   title: string;
 };
 
-type VerifiedUpdateRaw = {
+type LatestVerifiedRow = {
   id: number;
+  regulation: string;
+  regulation_name: string; 
   deduced_title: string;
   summary_text: string;
-  impact_level: 'High' | 'Medium' | 'Low';
+  impact_level: 'high' | 'medium' | 'low' | null;
   primary_source_url: string | null;
-  related_article_ids: (number | string)[];
-  created_at: string;
-};
-
-type LatestVerifiedRow = {
-  regulation_id: string;
+  related_article_ids: string | null; // Supabase view returns string
   deduced_published_date: string | null;
-  verified_update_id: VerifiedUpdateRaw;
+  created_at: string;
 };
 
 export async function GET() {
   const { data, error } = await supabase
-    .from<LatestVerifiedRow>('latest_verified_updates')
+    .from('latest_verified_updates')
     .select(`
-      regulation_id,
+      id,
+      regulation,
+      regulation_name,
+      deduced_title,
+      summary_text,
+      impact_level,
+      primary_source_url,
+      related_article_ids,
       deduced_published_date,
-      verified_update_id (
-        id,
-        deduced_title,
-        summary_text,
-        impact_level,
-        primary_source_url,
-        related_article_ids,
-        created_at
-      )
+      created_at
     `);
 
-  if (error) return NextResponse.json([], { status: 500 });
+  if (error) {
+    console.error('Fetch error:', error);
+    return NextResponse.json([], { status: 500 });
+  }
 
-  // Flatten related_article_ids
+  // Parse all related IDs from string
   const allRelatedIds: number[] = data
-    ?.flatMap(row =>
-      (row.verified_update_id.related_article_ids ?? []).map(id => Number(id))
-    ) ?? [];
+    ?.flatMap((row: LatestVerifiedRow) => {
+      try {
+        return JSON.parse(row.related_article_ids || '[]').map(Number);
+      } catch {
+        return [];
+      }
+    }) ?? [];
 
-  // Fetch all related articles
   const { data: articlesData } = allRelatedIds.length > 0
-    ? await supabase.from<Article>('raw_articles')
+    ? await supabase
+        .from('raw_articles')
         .select('id, url, title')
         .in('id', allRelatedIds)
     : { data: [] as Article[] };
 
-  const articlesMap = new Map(articlesData?.map(a => [a.id, a]));
+  const articlesMap = new Map<number, Article>(
+    articlesData?.map((a: Article) => [a.id, a])
+  );
 
-  // Build verified updates
-  const updates = (data ?? []).map(row => {
-    const raw = row.verified_update_id;
-    const related_articles: Article[] = (raw.related_article_ids ?? [])
-      .map(id => articlesMap.get(Number(id)))
-      .filter((a): a is Article => Boolean(a)); // type guard
+  const updates = (data ?? []).map((row: LatestVerifiedRow) => {
+    const relatedIds: number[] = (() => {
+      try {
+        return JSON.parse(row.related_article_ids || '[]').map(Number);
+      } catch {
+        return [];
+      }
+    })();
+
+    const related_articles: Article[] = relatedIds
+      .map((id) => articlesMap.get(id))
+      .filter((a): a is Article => Boolean(a));
 
     return {
-      id: raw.id,
-      regulation: row.regulation_id,
-      deduced_title: raw.deduced_title,
-      summary_text: raw.summary_text,
-      impact_level: raw.impact_level,
-      primary_source_url: raw.primary_source_url,
+      id: row.id,
+      regulation: row.regulation,
+      regulation_name: row.regulation_name, // stays intact
+      deduced_title: row.deduced_title,
+      summary_text: row.summary_text,
+      impact_level: row.impact_level?.toLowerCase() as 'high' | 'medium' | 'low' | undefined,
+      primary_source_url: row.primary_source_url,
       related_articles,
       deduced_published_date: row.deduced_published_date,
-      created_at: raw.created_at,
+      created_at: row.created_at,
     };
   });
 

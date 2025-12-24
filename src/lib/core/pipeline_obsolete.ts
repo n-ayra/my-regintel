@@ -17,6 +17,7 @@ import { semanticGroupSummaries } from '@/lib/core/semantic';
 import { tavilyExtract, tavilySearch, TavilyArticle as TavilyArticleCore } from './tavily';
 
 // --- Type Definitions ---
+
 export type TavilyArticle = TavilyArticleCore & {
   id?: number;
   published_at?: string;
@@ -38,13 +39,31 @@ export type CandidateUpdate = {
   evidence_summary?: string;
   article_published_date?: string | null;
   claims?: any[];
-  change_scope?: string;
+  change_scope?: string; 
   [key: string]: any;
 };
 
-// ---------------------------------------------------------
+
+//Fetch regulation config (start of scaling up to 21 regs)
+
+const regulations = await supabase
+  .from('regulations')
+  .select(`
+    id,
+    name,
+    regulation_search_profiles (
+      authority,
+      search_queries,
+      primary_sources
+    )
+  `);
+
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // Scan and store articles
-// ---------------------------------------------------------
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 export async function scanAndStoreArticles(
   config: { id: string; searchQueries: string[] },
   maxPerQuery = 10
@@ -64,15 +83,16 @@ export async function scanAndStoreArticles(
       });
 
       for (const r of results || []) {
-        let publishedDate = r.published_date;
+  let publishedDate = r.published_date;
 
-        // Step 1: Extract from article content / HTML
-        if (!publishedDate && r.content) {
-          const htmlMatch = r.content.match(
-            /<meta[^>]*(?:name|property)=["'](?:article:published_time|date)["'][^>]*content=["']([^"']+)["']/i
-          );
-          if (htmlMatch) publishedDate = htmlMatch[1];
-        }
+      // Step 1: Extract from article content / HTML
+      if (!publishedDate && r.content) {
+        const htmlMatch = r.content.match(
+          /<meta[^>]*(?:name|property)=["'](?:article:published_time|date)["'][^>]*content=["']([^"']+)["']/i
+        );
+        if (htmlMatch) publishedDate = htmlMatch[1];
+      }
+
 
         // Step 2: Fallback to parsing text for dates
         if (!publishedDate && r.content) {
@@ -95,14 +115,6 @@ export async function scanAndStoreArticles(
       console.error('Tavily search error', query, err);
     }
   }
-
-  // Sort articles by published date descending (newest first)
-  aggregatedResults.sort((a, b) => {
-    const dateA = a.published_at ? new Date(a.published_at).getTime() : 0;
-    const dateB = b.published_at ? new Date(b.published_at).getTime() : 0;
-  return dateB - dateA; // newest first
-});
-
 
   // Insert deduped articles into database
   const insertedIds: number[] = [];
@@ -188,9 +200,8 @@ export async function synthesizeArticles(
   return results;
 }
 
-// ---------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------
+
+
 function inferImpactLevel(text: string): 'high' | 'medium' | 'low' {
   if (/ban|mandatory|require|prohibit|enforce/i.test(text)) return 'high';
   if (/amend|update|revise|consultation/i.test(text)) return 'medium';
@@ -208,24 +219,51 @@ function buildAnchor(candidate: CandidateUpdate, regulationId: string) {
 }
 
 
-async function getCurrentLatestCandidate(regulationId: string, anchor: string) {
-  const { data } = await supabase
-    .from('latest_verified_updates')
+//This is what is going to run the 21 regulations
+export async function runAllRegulationsPipeline() {
+  const { data: regulations, error } = await supabase
+    .from('regulations')
     .select(`
-      verified_update_id,
-      deduced_published_date
-    `)
-    .eq('regulation_id', regulationId)
-    .eq('anchor', anchor)
-    .single();
+      id,
+      name,
+      regulation_search_profiles (
+        authority,
+        search_queries,
+        primary_sources
+      )
+    `);
 
-  return data ?? null;
+  if (error) {
+    console.error('Error fetching regulations', error);
+    return;
+  }
+
+  for (const regulation of regulations || []) {
+    for (const profile of regulation.regulation_search_profiles) {
+      for (const query of profile.search_queries) {
+        const rawArticles = await scanAndStoreArticles({
+          id: regulation.id,
+          searchQueries: [query]
+        });
+
+        if (!rawArticles.length) continue;
+
+        await runRegulationPipeline({
+          config: { id: regulation.id, searchQueries: [query] }
+        });
+      }
+    }
+
+    // Update last_scanned_at
+    await supabase
+      .from('regulations')
+      .update({ last_scanned_at: new Date().toISOString() })
+      .eq('id', regulation.id);
+  }
 }
 
 
-// ---------------------------------------------------------
-// Run pipeline for a single regulation
-// ---------------------------------------------------------
+
 export async function runRegulationPipeline({
   config,
   synthesisPromptBuilder = buildSynthesisPrompt,
@@ -268,6 +306,7 @@ export async function runRegulationPipeline({
   for (const anchor in candidateAnchors) {
     const group = candidateAnchors[anchor];
 
+    // Single candidate: assign merged_article_ids
     if (group.length === 1) {
       const single = group[0];
       if (!single.update_summary || !single.article_id) continue;
@@ -276,6 +315,7 @@ export async function runRegulationPipeline({
       continue;
     }
 
+    // Multiple candidates: perform semantic merge
     const summariesForSemantic: ArticleSummary[] = group
       .filter(c => c.update_summary && c.article_id)
       .map(c => ({
@@ -288,12 +328,13 @@ export async function runRegulationPipeline({
 
     if (consensus) {
       finalCandidates.push({
-        ...group[0],
+        ...group[0], // base candidate
         update_summary: consensus.mergedSummary,
         article_published_date: consensus.latestDate,
         merged_article_ids: consensus.articleIds
       });
     } else {
+      // fallback: mark each with its own article_id
       group.forEach(c => {
         if (!c.update_summary || !c.article_id) return;
         c.merged_article_ids = [c.article_id];
@@ -302,122 +343,50 @@ export async function runRegulationPipeline({
     }
   }
 
-    // 5️⃣ Insert into verified_updates and latest_verified_updates
+  // 5️⃣ Insert into verified_updates and latest_verified_updates
+  for (const candidate of finalCandidates) {
+    if (!candidate.update_summary || !candidate.merged_article_ids?.length) continue;
 
-for (const candidate of finalCandidates) {
-  if (!candidate.update_summary || !candidate.merged_article_ids?.length) continue;
+    // Map to DB constraint-safe impact_level
+    const impact_level = inferImpactLevel(candidate.update_summary);
 
-  const impact_level = inferImpactLevel(candidate.update_summary);
-  const anchor = buildAnchor(candidate, config.id);
-
-  // Use candidate.event_month if available, else fallback to article date
-  const deducedPublishedDate =
-    candidate.event_month && candidate.event_month !== 'unspecified'
-      ? `${candidate.event_month}-01`
-      : candidate.article_published_date ?? null;
-
-  const newDate = deducedPublishedDate ? dayjs(deducedPublishedDate) : dayjs();
-
-  // Fetch current latest for this regulation + anchor
-  const { data: currentLatest } = await supabase
-    .from('verified_updates')
-    .select('id, deduced_published_date')
-    .eq('regulation', config.id)
-    .eq('anchor', anchor)
-    .eq('is_latest', true)
-    .limit(1)
-    .single();
-
-  const currentDate = currentLatest?.deduced_published_date
-    ? dayjs(currentLatest.deduced_published_date)
-    : null;
-
-  const isNewer = !currentDate || newDate.isAfter(currentDate);
-
-
-
-  console.log({
-  anchor,
-  deducedPublishedDate,
-  newDate: newDate.format(),
-  currentDate: currentDate?.format(),
-  isNewer
-});
-
-  // If newer, demote old latest
-  if (isNewer && currentLatest?.id) {
-    await supabase
+    const { data: inserted, error } = await supabase
       .from('verified_updates')
-      .update({ is_latest: false })
-      .eq('id', currentLatest.id);
-  }
+      .insert({
+        regulation: config.id,
+        deduced_title: candidate.update_summary.slice(0, 100),
+        summary_text: candidate.update_summary,
+        impact_level: impact_level,
+        related_article_ids: candidate.merged_article_ids,
+        created_at: new Date().toISOString(),
+        deduced_published_date: candidate.article_published_date
+      })
+      .select('id')
+      .single();
 
-  // Insert new verified update
-  const { error } = await supabase
-    .from('verified_updates')
-    .insert({
-      regulation: config.id,
-      anchor,
-      deduced_title: candidate.update_summary.slice(0, 100),
-      summary_text: candidate.update_summary,
-      impact_level,
-      related_article_ids: candidate.merged_article_ids,
-      deduced_published_date: deducedPublishedDate, // ← use this!
-      is_latest: isNewer,
-      created_at: new Date().toISOString()
-    });
-
-  if (error) {
-    console.error('Insert verified_update error:', error);
-    continue;
-  }
-
-  // Mark contributing raw articles as processed
-  await supabase
-    .from('raw_articles')
-    .update({ is_processed: true })
-    .in('id', candidate.merged_article_ids);
-}
-
-console.log('Pipeline finished for config:', config.id);
-return { ok: true, consensus: true };
-
-}
-
-// ---------------------------------------------------------
-// Run all regulations (21 regs) sequentially
-// ---------------------------------------------------------
-export async function runAllRegulationsPipeline() {
-  const { data: regulations, error } = await supabase
-    .from('regulations')
-    .select(`
-      id,
-      name,
-      regulation_search_profiles (
-        authority,
-        search_queries,
-        primary_sources
-      )
-    `);
-
-  if (error) {
-    console.error('Error fetching regulations', error);
-    return;
-  }
-
-  for (const regulation of regulations || []) {
-    for (const profile of regulation.regulation_search_profiles) {
-      await runRegulationPipeline({
-        config: {
-          id: regulation.id,
-          searchQueries: profile.search_queries
-        }
-      });
+    if (error) {
+      console.error('Error inserting verified_update', error);
+      continue;
     }
 
+    // Upsert latest_verified_updates
     await supabase
-      .from('regulations')
-      .update({ last_scanned_at: new Date().toISOString() })
-      .eq('id', regulation.id);
+      .from('latest_verified_updates')
+      .upsert({
+        regulation_id: config.id,
+        verified_update_id: inserted.id,
+        deduced_published_date: candidate.article_published_date
+      });
+
+    // Mark all contributing raw_articles as processed
+    await supabase
+      .from('raw_articles')
+      .update({ is_processed: true })
+      .in('id', candidate.merged_article_ids);
   }
+
+  console.log('Pipeline finished for config:', config.id);
+  return { ok: true, consensus: true };
 }
+
+

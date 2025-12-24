@@ -1,8 +1,11 @@
+// OpenAI Configurations 
+
 import OpenAI from 'openai';
 
+// Using key from .env
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Use this type instead of ChatCompletionMessageParam
+
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -22,7 +25,7 @@ export async function askOpenAI(messages: ChatMessage[]) {
     });
 
     const content = response.choices?.[0]?.message?.content ?? '';
-    console.log('OpenAI response:', content);
+    console.log('OpenAI response:', content); // logging response 
     return content;
   } catch (err) {
     console.error('OpenAI request failed:', err);
