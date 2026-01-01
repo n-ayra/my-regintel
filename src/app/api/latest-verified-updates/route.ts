@@ -10,17 +10,18 @@ type Article = {
 type LatestVerifiedRow = {
   id: number;
   regulation: string;
-  regulation_name: string; 
+  regulation_name: string;
   deduced_title: string;
   summary_text: string;
   impact_level: 'high' | 'medium' | 'low' | null;
   primary_source_url: string | null;
-  related_article_ids: string | null; // Supabase view returns string
+  related_article_ids: string | null; // Supabase view returns stringified array
   deduced_published_date: string | null;
   created_at: string;
 };
 
 export async function GET() {
+  // 1️⃣ Fetch latest verified updates
   const { data, error } = await supabase
     .from('latest_verified_updates')
     .select(`
@@ -41,7 +42,7 @@ export async function GET() {
     return NextResponse.json([], { status: 500 });
   }
 
-  // Parse all related IDs from string
+  // 2️⃣ Collect all related article IDs
   const allRelatedIds: number[] = data
     ?.flatMap((row: LatestVerifiedRow) => {
       try {
@@ -51,6 +52,7 @@ export async function GET() {
       }
     }) ?? [];
 
+  // 3️⃣ Fetch actual article objects
   const { data: articlesData } = allRelatedIds.length > 0
     ? await supabase
         .from('raw_articles')
@@ -62,14 +64,12 @@ export async function GET() {
     articlesData?.map((a: Article) => [a.id, a])
   );
 
+  // 4️⃣ Map related_articles to each update
   const updates = (data ?? []).map((row: LatestVerifiedRow) => {
-    const relatedIds: number[] = (() => {
-      try {
-        return JSON.parse(row.related_article_ids || '[]').map(Number);
-      } catch {
-        return [];
-      }
-    })();
+    let relatedIds: number[] = [];
+    try {
+      relatedIds = JSON.parse(row.related_article_ids || '[]').map(Number);
+    } catch {}
 
     const related_articles: Article[] = relatedIds
       .map((id) => articlesMap.get(id))
@@ -78,7 +78,7 @@ export async function GET() {
     return {
       id: row.id,
       regulation: row.regulation,
-      regulation_name: row.regulation_name, // stays intact
+      regulation_name: row.regulation_name,
       deduced_title: row.deduced_title,
       summary_text: row.summary_text,
       impact_level: row.impact_level?.toLowerCase() as 'high' | 'medium' | 'low' | undefined,
