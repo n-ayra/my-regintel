@@ -1,3 +1,6 @@
+//obsolete file
+
+
 import type { RegConfig } from "@/lib/core/pipeline";
 
 export const SVHC_CONFIG: RegConfig = {
