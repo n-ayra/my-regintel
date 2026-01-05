@@ -35,10 +35,12 @@ export async function semanticGroupSummaries(
   if (group.length < 2) return null;
 
   // Calculate latest date safely
+  const now = dayjs();
   const latestDate = group
     .map(g => g.published_date)
     .filter(Boolean)
     .map(d => dayjs(d))
+    .filter(d => !d.isAfter(now)) // remove future dates
     .sort((a, b) => b.valueOf() - a.valueOf())[0]
     ?.toISOString() ?? null;
 

@@ -207,6 +207,18 @@ function buildAnchor(candidate: CandidateUpdate, regulationId: string) {
   return `${regulationId}::${updateType}::${eventMonth}::${changeScope}`;
 }
 
+function sanitizePublishedDate(dateStr: string | null): string | null {
+  if (!dateStr) return null;
+
+  const parsed = dayjs(dateStr);
+  const now = dayjs();
+
+  // If parsed date is in the future, discard it
+  if (parsed.isAfter(now)) return null;
+
+  return parsed.toISOString();
+}
+
 
 async function getCurrentLatestCandidate(regulationId: string, anchor: string) {
   const { data } = await supabase
@@ -311,10 +323,13 @@ for (const candidate of finalCandidates) {
   const anchor = buildAnchor(candidate, config.id);
 
   // Use candidate.event_month if available, else fallback to article date
-  const deducedPublishedDate =
+  const deducedPublishedDateRaw =
     candidate.event_month && candidate.event_month !== 'unspecified'
       ? `${candidate.event_month}-01`
       : candidate.article_published_date ?? null;
+
+  // ✅ Sanitize to avoid future dates
+  const deducedPublishedDate = sanitizePublishedDate(deducedPublishedDateRaw);
 
   const newDate = deducedPublishedDate ? dayjs(deducedPublishedDate) : dayjs();
 
@@ -333,8 +348,6 @@ for (const candidate of finalCandidates) {
     : null;
 
   const isNewer = !currentDate || newDate.isAfter(currentDate);
-
-
 
   console.log({
   anchor,

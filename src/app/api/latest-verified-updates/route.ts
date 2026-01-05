@@ -15,13 +15,12 @@ type LatestVerifiedRow = {
   summary_text: string;
   impact_level: 'high' | 'medium' | 'low' | null;
   primary_source_url: string | null;
-  related_article_ids: string | null; // Supabase view returns stringified array
+  related_article_ids: number[] | null; // <-- array of numbers now
   deduced_published_date: string | null;
   created_at: string;
 };
 
 export async function GET() {
-  // 1️⃣ Fetch latest verified updates
   const { data, error } = await supabase
     .from('latest_verified_updates')
     .select(`
@@ -42,38 +41,30 @@ export async function GET() {
     return NextResponse.json([], { status: 500 });
   }
 
-  // 2️⃣ Collect all related article IDs
   const allRelatedIds: number[] = data
-    ?.flatMap((row: LatestVerifiedRow) => {
-      try {
-        return JSON.parse(row.related_article_ids || '[]').map(Number);
-      } catch {
-        return [];
-      }
-    }) ?? [];
+    ?.flatMap((row: LatestVerifiedRow) => row.related_article_ids ?? []) ?? [];
 
-  // 3️⃣ Fetch actual article objects
-  const { data: articlesData } = allRelatedIds.length > 0
+  const { data: articlesData, error: articlesError } = allRelatedIds.length > 0
     ? await supabase
         .from('raw_articles')
         .select('id, url, title')
         .in('id', allRelatedIds)
-    : { data: [] as Article[] };
+    : { data: [] as Article[], error: null };
+
+  if (articlesError) {
+    console.error('Articles fetch error:', articlesError);
+    return NextResponse.json([], { status: 500 });
+  }
 
   const articlesMap = new Map<number, Article>(
-    articlesData?.map((a: Article) => [a.id, a])
+    articlesData?.map((a: Article) => [a.id, a]) ?? []
   );
 
-  // 4️⃣ Map related_articles to each update
   const updates = (data ?? []).map((row: LatestVerifiedRow) => {
-    let relatedIds: number[] = [];
-    try {
-      relatedIds = JSON.parse(row.related_article_ids || '[]').map(Number);
-    } catch {}
-
-    const related_articles: Article[] = relatedIds
+    const related_articles: Article[] = (row.related_article_ids ?? [])
       .map((id) => articlesMap.get(id))
-      .filter((a): a is Article => Boolean(a));
+      .filter((a): a is Article => Boolean(a))
+      .sort((a, b) => a.id - b.id);
 
     return {
       id: row.id,
