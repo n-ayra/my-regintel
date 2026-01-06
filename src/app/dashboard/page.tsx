@@ -121,6 +121,11 @@ export default function DashboardPage() {
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [modalOpen, setModalOpen] = useState<VerifiedUpdate | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortKey, setSortKey] = useState<'date' | 'name'>('date');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+
 
   const fetchUpdates = async (showRefresh = false) => {
     if (showRefresh) {
@@ -158,6 +163,34 @@ export default function DashboardPage() {
   }, []);
 
   const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1);
+
+
+  const filteredAndSortedUpdates = updates
+    .filter(u =>
+      u.regulation_name
+        .toLowerCase()
+        .includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => {
+      if (sortKey === 'name') {
+        const nameA = a.regulation_name.toLowerCase();
+        const nameB = b.regulation_name.toLowerCase();
+        return sortOrder === 'asc'
+          ? nameA.localeCompare(nameB)
+          : nameB.localeCompare(nameA);
+      }
+
+      // sort by date
+      const dateA = a.deduced_published_date
+        ? new Date(a.deduced_published_date).getTime()
+        : 0;
+      const dateB = b.deduced_published_date
+        ? new Date(b.deduced_published_date).getTime()
+        : 0;
+
+      return sortOrder === 'asc' ? dateA - dateB : dateB - dateA;
+    });
+
 
   return (
     <>
@@ -262,6 +295,36 @@ export default function DashboardPage() {
             </div>
           </motion.div>
 
+          {/* Search & Sort */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-lg mb-8 flex flex-col md:flex-row gap-4 items-center">
+            <input
+              type="text"
+              placeholder="Search by regulation name..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full md:flex-1 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as 'date' | 'name')}
+              className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm"
+            >
+              <option value="date">Sort by Date</option>
+              <option value="name">Sort by Regulation Name</option>
+            </select>
+
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+              className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm"
+            >
+              <option value="desc">Descending</option>
+              <option value="asc">Ascending</option>
+            </select>
+          </div>
+
+
           {/* Loading / Empty */}
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20">
@@ -305,7 +368,7 @@ export default function DashboardPage() {
               animate="visible"
               className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
             >
-              {updates.map((update, index) => {
+              {filteredAndSortedUpdates.map((update, index) => {
                 const articleCount = update.related_articles?.length ?? 0;
                 const confidence = getConfidence(articleCount);
                 const impact = impactColor(update.impact_level);
