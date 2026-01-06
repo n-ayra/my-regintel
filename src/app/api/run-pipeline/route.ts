@@ -3,8 +3,12 @@ import { supabase } from '@/lib/core/database';
 import { runRegulationPipeline } from '@/lib/core/pipeline';
 import { buildSynthesisPrompt } from '@/lib/regulations/svhc/processors';
 
+// ==========================================
+// PIPELINE TRIGGER HANDLER
+// ==========================================
 export async function GET() {
-  // 1️⃣ Fetch all regulations with their search profiles
+  
+  // 1. Fetch active regulations and their associated search profiles
   const { data: regulations, error } = await supabase
     .from('regulations')
     .select(`
@@ -28,11 +32,12 @@ export async function GET() {
 
   const results: any[] = [];
 
-  // 2️⃣ Loop over each regulation and its search profiles
+  // 2. Iterate through each regulation and run its specific pipeline
   for (const reg of regulations) {
     const profiles = reg.regulation_search_profiles ?? [];
 
     for (const profile of profiles) {
+      // Map database profile to pipeline configuration
       const config = {
         id: reg.id,
         searchQueries: profile.search_queries,
@@ -41,11 +46,14 @@ export async function GET() {
 
       try {
         console.log(`Running pipeline for regulation: ${reg.name}`);
+        
+        // Execute the scanning and synthesis logic
         const res = await runRegulationPipeline({
           config,
           synthesisPromptBuilder: buildSynthesisPrompt,
-          maxSearchPerQuery: 5, // or customize per profile
+          maxSearchPerQuery: 5, 
         });
+        
         results.push({ regulation: reg.name, result: res });
       } catch (err) {
         console.error(`Pipeline failed for regulation ${reg.name}:`, err);

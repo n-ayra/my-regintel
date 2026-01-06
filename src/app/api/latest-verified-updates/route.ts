@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/core/database';
 
+// ==========================================
+// 1. TYPES & INTERFACES
+// ==========================================
 type Article = {
   id: number;
   url: string;
@@ -15,12 +18,16 @@ type LatestVerifiedRow = {
   summary_text: string;
   impact_level: 'high' | 'medium' | 'low' | null;
   primary_source_url: string | null;
-  related_article_ids: number[] | null; // <-- array of numbers now
+  related_article_ids: number[] | null; 
   deduced_published_date: string | null;
   created_at: string;
 };
 
+// ==========================================
+// 2. GET HANDLER (API ROUTE)
+// ==========================================
 export async function GET() {
+  // Fetch main regulatory updates from Supabase
   const { data, error } = await supabase
     .from('latest_verified_updates')
     .select(`
@@ -41,9 +48,11 @@ export async function GET() {
     return NextResponse.json([], { status: 500 });
   }
 
+  // Collect all IDs needed to fetch related article details
   const allRelatedIds: number[] = data
     ?.flatMap((row: LatestVerifiedRow) => row.related_article_ids ?? []) ?? [];
 
+  // Fetch article titles/URLs for all collected IDs
   const { data: articlesData, error: articlesError } = allRelatedIds.length > 0
     ? await supabase
         .from('raw_articles')
@@ -56,14 +65,16 @@ export async function GET() {
     return NextResponse.json([], { status: 500 });
   }
 
+  // Create a Map for quick lookup of article details by ID
   const articlesMap = new Map<number, Article>(
     articlesData?.map((a: Article) => [a.id, a]) ?? []
   );
 
+  // Combine updates with their full related article objects
   const updates = (data ?? []).map((row: LatestVerifiedRow) => {
     const related_articles: Article[] = (row.related_article_ids ?? [])
       .map((id) => articlesMap.get(id))
-      .filter((a): a is Article => Boolean(a))
+      .filter((a): a is Article => Boolean(a)) // Remove any undefined lookups
       .sort((a, b) => a.id - b.id);
 
     return {

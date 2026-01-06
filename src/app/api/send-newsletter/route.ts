@@ -3,10 +3,15 @@ import nodemailer from 'nodemailer';
 import { fetchUpdates } from '@/lib/fetchUpdates';
 import { renderNewsletter } from '@/lib/renderNewsletter';
 
+// ==========================================
+// EMAIL DISPATCH HANDLER
+// ==========================================
 export async function GET() {
+  // 1. Prepare data and generate the HTML email content
   const articles = await fetchUpdates();
   const html = renderNewsletter(articles);
 
+  // 2. Configure the email transport service (Gmail)
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -16,15 +21,17 @@ export async function GET() {
   });
 
   try {
+    // 3. Attempt to send the email
     await transporter.sendMail({
       from: `"Regintels" <${process.env.EMAIL_USER}>`,
-      to: 'h@prefchem.com.my',
+      to: 'h@prefchem.com.my', // Hardcoded recipient
       subject: 'Weekly Regulatory Updates',
       html,
     });
 
     return NextResponse.json({ status: 'success', message: 'Email sent!' });
   } catch (err) {
+    // 4. Handle errors (e.g., authentication failure or network issues)
     console.error(err);
     return NextResponse.json({ status: 'error', message: 'Failed to send email' });
   }
