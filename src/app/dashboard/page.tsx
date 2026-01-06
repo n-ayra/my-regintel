@@ -4,6 +4,10 @@ import { useEffect, useState } from 'react';
 import { ArrowRight, X, AlertCircle, CheckCircle, Zap, RefreshCw, ExternalLink, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 
+// ==========================================
+// 1. TYPES & INTERFACES
+// ==========================================
+
 type Article = {
   id: number;
   title: string;
@@ -23,18 +27,31 @@ type VerifiedUpdate = {
   created_at: string;
 };
 
+// ==========================================
+// 2. HELPER / UTILITY FUNCTIONS
+// ==========================================
+
+/**
+ * Returns UI labels and colors based on how many articles support the update
+ */
 const getConfidence = (count: number) => {
   if (count >= 4) return { label: 'High', color: 'bg-gradient-to-r from-green-500 to-emerald-600', icon: <CheckCircle className="h-4 w-4 inline mr-1" /> };
   if (count >= 2) return { label: 'Medium', color: 'bg-gradient-to-r from-yellow-500 to-amber-600', icon: <Zap className="h-4 w-4 inline mr-1" /> };
   return { label: 'Low', color: 'bg-gradient-to-r from-red-500 to-rose-600', icon: <AlertCircle className="h-4 w-4 inline mr-1" /> };
 };
 
+/**
+ * Formats a date string into UK format (DD/MM/YYYY)
+ */
 const formatDate = (dateStr: string | null | undefined) => {
   if (!dateStr) return 'No Deduced Date';
   const date = new Date(dateStr);
   return isNaN(date.getTime()) ? 'No Deduced Date' : date.toLocaleDateString('en-GB');
 };
 
+/**
+ * Determines the color and icon based on the impact level (High/Medium/Low)
+ */
 const impactColor = (level: string) => {
   switch (level.toLowerCase()) {
     case 'high': return { 
@@ -53,60 +70,26 @@ const impactColor = (level: string) => {
   }
 };
 
+// ==========================================
+// 3. ANIMATION SETTINGS (Framer Motion)
+// ==========================================
+
 const cardVariants: Variants = {
   hidden: { opacity: 0, y: 20 },
-  visible: { 
-    opacity: 1, 
-    y: 0,
-    transition: {
-      duration: 0.4,
-      ease: "easeOut"
-    }
-  },
-  hover: {
-    y: -8,
-    scale: 1.02,
-    transition: {
-      duration: 0.2,
-      ease: "easeInOut"
-    }
-  },
-  tap: {
-    scale: 0.98
-  }
+  visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: "easeOut" } },
+  hover: { y: -8, scale: 1.02, transition: { duration: 0.2, ease: "easeInOut" } },
+  tap: { scale: 0.98 }
 };
 
 const containerVariants: Variants = {
   hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.1,
-      delayChildren: 0.1
-    }
-  }
+  visible: { opacity: 1, transition: { staggerChildren: 0.1, delayChildren: 0.1 } }
 };
 
 const modalVariants: Variants = {
-  hidden: { 
-    opacity: 0,
-    scale: 0.9
-  },
-  visible: { 
-    opacity: 1,
-    scale: 1,
-    transition: {
-      duration: 0.3,
-      ease: "easeOut"
-    }
-  },
-  exit: {
-    opacity: 0,
-    scale: 0.9,
-    transition: {
-      duration: 0.2
-    }
-  }
+  hidden: { opacity: 0, scale: 0.9 },
+  visible: { opacity: 1, scale: 1, transition: { duration: 0.3, ease: "easeOut" } },
+  exit: { opacity: 0, scale: 0.9, transition: { duration: 0.2 } }
 };
 
 const backdropVariants: Variants = {
@@ -115,7 +98,12 @@ const backdropVariants: Variants = {
   exit: { opacity: 0 }
 };
 
+// ==========================================
+// 4. MAIN COMPONENT
+// ==========================================
+
 export default function DashboardPage() {
+  // --- STATE ---
   const [updates, setUpdates] = useState<VerifiedUpdate[]>([]);
   const [loading, setLoading] = useState(false);
   const [pipelineRunning, setPipelineRunning] = useState(false);
@@ -125,8 +113,11 @@ export default function DashboardPage() {
   const [sortKey, setSortKey] = useState<'date' | 'name'>('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
+  // --- API FUNCTIONS ---
 
-
+  /**
+   * Loads data from the database
+   */
   const fetchUpdates = async (showRefresh = false) => {
     if (showRefresh) {
       setRefreshing(true);
@@ -145,12 +136,15 @@ export default function DashboardPage() {
     }
   };
 
+  /**
+   * Starts the background scanning process
+   */
   const runPipeline = async () => {
     setPipelineRunning(true);
     try {
       const res = await fetch('/api/run-pipeline');
       await res.json();
-      await fetchUpdates();
+      await fetchUpdates(); // Refresh list after scan finish
     } catch (err) {
       console.error('Pipeline error', err);
     } finally {
@@ -158,13 +152,14 @@ export default function DashboardPage() {
     }
   };
 
+  // Run on initial page load
   useEffect(() => {
     fetchUpdates();
   }, []);
 
   const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1);
 
-
+  // --- FILTERING & SORTING LOGIC ---
   const filteredAndSortedUpdates = updates
     .filter(u =>
       u.regulation_name
@@ -172,6 +167,7 @@ export default function DashboardPage() {
         .includes(searchQuery.toLowerCase())
     )
     .sort((a, b) => {
+      // Sort by Name
       if (sortKey === 'name') {
         const nameA = a.regulation_name.toLowerCase();
         const nameB = b.regulation_name.toLowerCase();
@@ -180,7 +176,7 @@ export default function DashboardPage() {
           : nameB.localeCompare(nameA);
       }
 
-      // sort by date
+      // Sort by Date
       const dateA = a.deduced_published_date
         ? new Date(a.deduced_published_date).getTime()
         : 0;
@@ -195,7 +191,8 @@ export default function DashboardPage() {
   return (
     <>
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 p-4 md:p-6">
-        {/* Animated Background Elements */}
+        
+        {/* ANIMATED BACKGROUND DECORATION */}
         <div className="fixed inset-0 overflow-hidden pointer-events-none">
           <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-500 rounded-full mix-blend-multiply filter blur-3xl opacity-10 animate-blob"></div>
           <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl opacity-10 animate-blob animation-delay-2000"></div>
@@ -203,7 +200,8 @@ export default function DashboardPage() {
         </div>
 
         <div className="relative max-w-7xl mx-auto">
-          {/* Header */}
+          
+          {/* HEADER: TITLE AND ACTIONS */}
           <motion.div 
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -267,7 +265,7 @@ export default function DashboardPage() {
             </div>
           </motion.div>
 
-          {/* Stats Banner */}
+          {/* STATS BANNER: SUMMARY NUMBERS */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -295,7 +293,7 @@ export default function DashboardPage() {
             </div>
           </motion.div>
 
-          {/* Search & Sort */}
+          {/* SEARCH & SORT CONTROLS */}
           <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-lg mb-8 flex flex-col md:flex-row gap-4 items-center">
             <input
               type="text"
@@ -325,7 +323,7 @@ export default function DashboardPage() {
           </div>
 
 
-          {/* Loading / Empty */}
+          {/* LOADING STATE DISPLAY */}
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20">
               <div className="relative">
@@ -339,6 +337,7 @@ export default function DashboardPage() {
               </p>
             </div>
           ) : updates.length === 0 ? (
+            /* EMPTY STATE DISPLAY */
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -362,13 +361,14 @@ export default function DashboardPage() {
               </button>
             </motion.div>
           ) : (
+            /* DATA GRID DISPLAY */
             <motion.div
               variants={containerVariants}
               initial="hidden"
               animate="visible"
               className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
             >
-              {filteredAndSortedUpdates.map((update, index) => {
+              {filteredAndSortedUpdates.map((update) => {
                 const articleCount = update.related_articles?.length ?? 0;
                 const confidence = getConfidence(articleCount);
                 const impact = impactColor(update.impact_level);
@@ -384,11 +384,10 @@ export default function DashboardPage() {
                     className="group relative cursor-pointer"
                     onClick={() => setModalOpen(update)}
                   >
-                    {/* Card Gradient Border Effect */}
+                    {/* CARD BORDER GLOW EFFECT */}
                     <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500 to-purple-600 rounded-2xl blur opacity-0 group-hover:opacity-30 transition duration-500"></div>
                     
                     <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 flex flex-col justify-between min-h-[280px] overflow-hidden">
-                      {/* Corner accent */}
                       <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-blue-500/10 to-purple-600/10 rounded-bl-3xl" />
                       
                       <div>
@@ -420,7 +419,6 @@ export default function DashboardPage() {
                         <motion.span
                           whileHover={{ scale: 1.05 }}
                           className={`px-4 py-2 rounded-full text-xs font-semibold text-white flex items-center shadow-md ${impact.color}`}
-                          title={`Impact Level: ${capitalize(update.impact_level)}`}
                         >
                           {impact.icon} {capitalize(update.impact_level)} Impact
                         </motion.span>
@@ -428,13 +426,11 @@ export default function DashboardPage() {
                         <motion.span
                           whileHover={{ scale: 1.05 }}
                           className={`px-4 py-2 rounded-full text-xs font-semibold text-white flex items-center shadow-md ${confidence.color}`}
-                          title={`Confidence based on related articles (${articleCount})`}
                         >
                           {confidence.icon} {confidence.label} Confidence
                         </motion.span>
                       </div>
                       
-                      {/* Hover overlay */}
                       <div className="absolute inset-0 bg-gradient-to-t from-blue-600/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity rounded-2xl" />
                     </div>
                   </motion.div>
@@ -445,7 +441,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* DETAIL MODAL POPUP */}
       <AnimatePresence>
         {modalOpen && (
           <motion.div
@@ -464,7 +460,7 @@ export default function DashboardPage() {
               className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden relative"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Modal Header */}
+              {/* MODAL HEADER */}
               <div className="sticky top-0 z-10 bg-gradient-to-r from-blue-600 to-purple-600 p-6">
                 <div className="flex items-start justify-between">
                   <div className="pr-8">
@@ -492,14 +488,9 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* Modal Content */}
+              {/* MODAL CONTENT BODY */}
               <div className="p-6 overflow-y-auto max-h-[calc(90vh-200px)]">
-                <motion.section
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.1 }}
-                  className="mb-8"
-                >
+                <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="mb-8">
                   <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-800 dark:text-white">
                     <div className="h-1 w-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full mr-3"></div>
                     Summary
@@ -510,12 +501,7 @@ export default function DashboardPage() {
                 </motion.section>
 
                 {modalOpen.primary_source_url && (
-                  <motion.section
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.2 }}
-                    className="mb-8"
-                  >
+                  <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="mb-8">
                     <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-800 dark:text-white">
                       <div className="h-1 w-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full mr-3"></div>
                       Primary Source
@@ -533,11 +519,7 @@ export default function DashboardPage() {
                   </motion.section>
                 )}
 
-                <motion.section
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.3 }}
-                >
+                <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
                   <h3 className="text-lg font-semibold mb-4 flex items-center text-gray-800 dark:text-white">
                     <div className="h-1 w-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full mr-3"></div>
                     Related Articles ({modalOpen.related_articles?.length || 0})
