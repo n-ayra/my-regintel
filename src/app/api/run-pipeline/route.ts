@@ -6,10 +6,11 @@ import { buildSynthesisPrompt } from '@/lib/regulations/svhc/processors';
 // ==========================================
 // PIPELINE TRIGGER HANDLER
 // ==========================================
-export async function GET() {
-  
-  // 1. Fetch active regulations and their associated search profiles
-  const { data: regulations, error } = await supabase
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const regIdParam = url.searchParams.get('regulationId'); // e.g., "39" or "39,42"
+
+  let query = supabase
     .from('regulations')
     .select(`
       id,
@@ -19,7 +20,19 @@ export async function GET() {
         search_queries,
         primary_sources
       )
-    `);
+    `)
+    .eq('is_active', true);
+
+  // ✅ If regulationId is provided, filter by the IDs
+  if (regIdParam) {
+    const ids = regIdParam
+      .split(',')
+      .map(id => parseInt(id.trim()))
+      .filter(id => !isNaN(id));
+    if (ids.length > 0) query = query.in('id', ids);
+  }
+
+  const { data: regulations, error } = await query;
 
   if (error) {
     console.error('Error fetching regulations:', error);
@@ -32,32 +45,41 @@ export async function GET() {
 
   const results: any[] = [];
 
-  // 2. Iterate through each regulation and run its specific pipeline
   for (const reg of regulations) {
-    const profiles = reg.regulation_search_profiles ?? [];
+    // Wrap single object or null as array to avoid "not iterable" errors
+    const profiles = Array.isArray(reg.regulation_search_profiles)
+      ? reg.regulation_search_profiles
+      : reg.regulation_search_profiles
+      ? [reg.regulation_search_profiles]
+      : [];
+
+    if (profiles.length === 0) {
+      console.warn(`Skipping regulation "${reg.name}" — no profiles`);
+      continue;
+    }
 
     for (const profile of profiles) {
-      // Map database profile to pipeline configuration
+      const searchQueries = Array.isArray(profile.search_queries) ? profile.search_queries : [];
+      const primarySources = Array.isArray(profile.primary_sources) ? profile.primary_sources : [];
+
       const config = {
-        id: reg.id,
-        searchQueries: profile.search_queries,
-        primarySourceUrl: profile.primary_sources?.[0] ?? undefined,
+        id: String(reg.id), // convert number → string
+        regulationName: reg.name,
+        searchQueries,
+        primarySourceUrl: primarySources[0] ?? undefined,
       };
 
       try {
-        console.log(`Running pipeline for regulation: ${reg.name}`);
-        
-        // Execute the scanning and synthesis logic
+        console.log(`Running pipeline for: ${reg.name}`);
         const res = await runRegulationPipeline({
           config,
           synthesisPromptBuilder: buildSynthesisPrompt,
-          maxSearchPerQuery: 5, 
+          maxSearchPerQuery: 5,
         });
-        
         results.push({ regulation: reg.name, result: res });
       } catch (err) {
         console.error(`Pipeline failed for regulation ${reg.name}:`, err);
-        results.push({ regulation: reg.name, result: 'failed', error: err });
+        results.push({ regulation: reg.name, result: 'failed', error: String(err) });
       }
     }
   }
