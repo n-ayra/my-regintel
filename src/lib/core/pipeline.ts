@@ -42,6 +42,11 @@ export type CandidateUpdate = {
   [key: string]: any;
 };
 
+type ImpactKeyword = {
+  keyword: string;
+  level: 'high' | 'medium' | 'low';
+};
+
 // ---------------------------------------------------------
 // Scan and store articles
 // ---------------------------------------------------------
@@ -188,14 +193,51 @@ export async function synthesizeArticles(
   return results;
 }
 
+async function getImpactKeywords(): Promise<ImpactKeyword[]> {
+  const { data, error } = await supabase
+    .from("impact_keywords")
+    .select("keyword, level");
+
+  if (error || !data) return [];
+  return data as ImpactKeyword[];
+}
+
+
 // ---------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------
-function inferImpactLevel(text: string): 'high' | 'medium' | 'low' {
+export async function inferImpactLevel(
+  text: string
+): Promise<'high' | 'medium' | 'low'> {
+
+  text = text.toLowerCase();
+
+  // fetch from DB
+  const keywords = await getImpactKeywords();
+
+  // if DB has values → use them
+  if (keywords.length > 0) {
+
+    // priority order: high → medium → low
+    for (const level of ['high', 'medium', 'low'] as const) {
+      if (
+        keywords
+          .filter(k => k.level === level)
+          .some(k => text.includes(k.keyword.toLowerCase()))
+      ) {
+        return level;
+      }
+    }
+
+    return 'low';
+  }
+
+  // fallback when database empty
   if (/ban|mandatory|require|prohibit|enforce/i.test(text)) return 'high';
   if (/amend|update|revise|consultation/i.test(text)) return 'medium';
   return 'low';
 }
+
 
 function buildAnchor(candidate: CandidateUpdate, regulationId: string) {
   const updateType = candidate.update_type ?? 'unspecified';
@@ -319,7 +361,7 @@ export async function runRegulationPipeline({
 for (const candidate of finalCandidates) {
   if (!candidate.update_summary || !candidate.merged_article_ids?.length) continue;
 
-  const impact_level = inferImpactLevel(candidate.update_summary);
+  const impact_level = await inferImpactLevel(candidate.update_summary);
   const anchor = buildAnchor(candidate, config.id);
 
   // Use candidate.event_month if available, else fallback to article date

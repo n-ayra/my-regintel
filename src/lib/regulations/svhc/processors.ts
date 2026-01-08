@@ -1,4 +1,3 @@
-//obsolete file
 
 import type { TavilyArticle } from "@/lib/core/pipeline";
 

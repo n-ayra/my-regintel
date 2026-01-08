@@ -58,3 +58,6 @@ export async function getActiveRegulationsWithProfile(): Promise<RegulationWithP
     })
     .filter(Boolean) as RegulationWithProfile[];
 }
+
+
+
