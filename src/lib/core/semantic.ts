@@ -13,45 +13,64 @@ export type SemanticResult = {
   latestDate: string | null;
 };
 
+/**
+ * Groups semantically similar articles together.
+ * Returns the largest cluster (most supporting articles).
+ */
 export async function semanticGroupSummaries(
   summaries: ArticleSummary[]
 ): Promise<SemanticResult | null> {
   if (summaries.length < 2) return null;
 
-  // Pick the first summary as anchor
-  const anchor = summaries[0];
+  const groups: ArticleSummary[][] = [];
 
-  // Compare all summaries in parallel
-  const comparisonResults = await Promise.all(
-    summaries.slice(1).map(async (candidate) => {
-      const same = await roughlySameUpdate(anchor.summary, candidate.summary);
-      return same ? candidate : null;
-    })
-  );
+  for (const summary of summaries) {
+    let addedToGroup = false;
 
-  // Build group with anchor + matching candidates
-  const group = [anchor, ...comparisonResults.filter(Boolean) as ArticleSummary[]];
+    for (const group of groups) {
+      // Check if summary matches any article already in the group
+      const isSame = await Promise.all(
+        group.map(g => roughlySameUpdate(g.summary, summary.summary))
+      ).then(results => results.some(r => r));
 
-  if (group.length < 2) return null;
+      if (isSame) {
+        group.push(summary);
+        addedToGroup = true;
+        break;
+      }
+    }
+
+    if (!addedToGroup) {
+      // Start a new group
+      groups.push([summary]);
+    }
+  }
+
+  // Pick the largest group (most supporting articles)
+  const largestGroup = groups.sort((a, b) => b.length - a.length)[0];
+
+  if (largestGroup.length < 2) return null;
 
   // Calculate latest date safely
   const now = dayjs();
-  const latestDate = group
+  const latestDate = largestGroup
     .map(g => g.published_date)
     .filter(Boolean)
     .map(d => dayjs(d))
-    .filter(d => !d.isAfter(now)) // remove future dates
+    .filter(d => !d.isAfter(now)) // discard future dates
     .sort((a, b) => b.valueOf() - a.valueOf())[0]
     ?.toISOString() ?? null;
 
   return {
-    mergedSummary: group.map(g => g.summary).join(' '),
-    articleIds: group.map(g => g.id),
+    mergedSummary: largestGroup.map(g => g.summary).join(' '),
+    articleIds: largestGroup.map(g => g.id),
     latestDate,
   };
 }
 
-// OpenAI helper
+/**
+ * Uses OpenAI to determine if two summaries describe the same regulatory update.
+ */
 async function roughlySameUpdate(a: string, b: string): Promise<boolean> {
   const response = await askOpenAI([
     {

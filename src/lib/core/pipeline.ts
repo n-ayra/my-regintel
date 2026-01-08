@@ -52,7 +52,7 @@ type ImpactKeyword = {
 // ---------------------------------------------------------
 export async function scanAndStoreArticles(
   config: { id: string; searchQueries: string[] },
-  maxPerQuery = 10
+  maxPerQuery = 12
 ): Promise<number[]> {
   console.log(`Scanning articles for config: ${config.id}`);
 
