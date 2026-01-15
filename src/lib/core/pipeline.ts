@@ -9,7 +9,7 @@ dayjs.extend(isSameOrAfter);
 dayjs.extend(isSameOrBefore);
 
 // Internal Modules
-import { buildSynthesisPrompt } from "@/lib/regulations/svhc/processors";
+import { buildSynthesisPrompt } from "@/lib/core/processors";
 import { supabase } from './database';
 import { askOpenAI } from './openai';
 import type { ArticleSummary } from '@/lib/core/semantic';

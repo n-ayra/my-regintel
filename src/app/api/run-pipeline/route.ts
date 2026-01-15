@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/core/database';
 import { runRegulationPipeline } from '@/lib/core/pipeline';
-import { buildSynthesisPrompt } from '@/lib/regulations/svhc/processors';
+import { buildSynthesisPrompt } from '@/lib/core/processors';
 
 // ==========================================
 // PIPELINE TRIGGER HANDLER
@@ -57,14 +57,14 @@ export async function GET(req: Request) {
       continue;
     }
 
-    let scannedSuccessfully = false; // Track if this regulation scanned successfully
+    let scannedSuccessfully = false; 
 
     for (const profile of profiles) {
       const searchQueries = Array.isArray(profile.search_queries) ? profile.search_queries : [];
       const primarySources = Array.isArray(profile.primary_sources) ? profile.primary_sources : [];
 
       const config = {
-        id: String(reg.id), // convert number → string
+        id: String(reg.id),
         regulationName: reg.name,
         searchQueries,
         primarySourceUrl: primarySources[0] ?? undefined,
